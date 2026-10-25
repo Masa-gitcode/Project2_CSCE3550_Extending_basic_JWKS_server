@@ -6,10 +6,16 @@ import base64
 import json
 import jwt
 import datetime
+import os       # schema file
+import sqlite3  # database
+import time     # time expiration 
+
+SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "schema.sql")
 
 hostName = "localhost"
 serverPort = 8080
 
+# RSA private key
 private_key = rsa.generate_private_key(
     public_exponent=65537,
     key_size=2048,
@@ -19,14 +25,16 @@ expired_key = rsa.generate_private_key(
     key_size=2048,
 )
 
+# PKCS PEM format
 pem = private_key.private_bytes(
     encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.TraditionalOpenSSL,
+    format=serialization.PrivateFormat.TraditionalOpenSSL, # makes it PKCS1 format
     encryption_algorithm=serialization.NoEncryption()
 )
+# PKCS PEM format
 expired_pem = expired_key.private_bytes(
     encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.TraditionalOpenSSL,
+    format=serialization.PrivateFormat.TraditionalOpenSSL, # makes it PKCS1 format
     encryption_algorithm=serialization.NoEncryption()
 )
 
@@ -113,8 +121,36 @@ class MyServer(BaseHTTPRequestHandler):
         self.end_headers()
         return
 
+    # save private ley to the database
+    def save_key(conn, prm_bytes, expitrd_time):
+        conn.execute("INSERT INTO keys (key, exp) VALUES (?, ?)", (pem_bytes, exp))
+        conn.commit()
+    
+    def seed_keys(conn):
+        now = int(time.time())
+        # find if there're keys
+        valid_count, expired_count = conn.execute(
+            "SELECT COALESCE(SUM(exp > ?), 0), COALESCE(SUM(exp <= ?), 0) FROM keys",
+            (now, now)).fetchone()
+        # if no valid -> add one valid key
+        if not has_valid:
+            save_key(conn, pem, now + 3600)
+        # if no expied -> add one expired key
+        if not has_expired:
+            save_key(conn, expired_pem, now - 3600)
+
+# created the back storage file "totally_not_my_privateKeys.db" and connected to schema.sql file
+def connect(db_file="totally_not_my_privateKeys.db"):
+    conn = sqlite3.connect(db_file)
+    with open(SCHEMA_FILE) as f:
+        conn.executescript(f.read())
+    return conn
 
 if __name__ == "__main__":
+    conn = connect()
+    seed_keys(conn)
+    conn.close()
+    
     webServer = HTTPServer((hostName, serverPort), MyServer)
     try:
         webServer.serve_forever()
