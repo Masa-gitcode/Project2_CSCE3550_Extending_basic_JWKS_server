@@ -7,7 +7,7 @@ import json
 import jwt
 import os       # schema file
 import sqlite3  # database
-import time     # time expiration 
+import time     # time expiration
 
 SCHEMA_FILE = os.path.join(os.path.dirname(__file__), "schema.sql")
 
@@ -27,13 +27,15 @@ expired_key = rsa.generate_private_key(
 # PKCS PEM format
 pem = private_key.private_bytes(
     encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.TraditionalOpenSSL, # makes it PKCS1 format
+    # TraditionalOpenSSL is the PKCS#1 format
+    format=serialization.PrivateFormat.TraditionalOpenSSL,
     encryption_algorithm=serialization.NoEncryption()
 )
 # PKCS PEM format
 expired_pem = expired_key.private_bytes(
     encoding=serialization.Encoding.PEM,
-    format=serialization.PrivateFormat.TraditionalOpenSSL, # makes it PKCS1 format
+    # TraditionalOpenSSL is the PKCS#1 format
+    format=serialization.PrivateFormat.TraditionalOpenSSL,
     encryption_algorithm=serialization.NoEncryption()
 )
 
@@ -77,23 +79,24 @@ class MyServer(BaseHTTPRequestHandler):
         params = parse_qs(parsed_path.query, keep_blank_values=True)
         if parsed_path.path == "/auth":
             expired = 'expired' in params
-            connection= connect()
-            row= read_privatekey(connection, expired)
+            connection = connect()
+            row = read_privatekey(connection, expired)
             connection.close()
 
             if row is None:
                 self.send_response(500)
                 self.end_headers()
                 return
-            
-            kid, key_pem= row
-            headers= {"kid": str(kid)}
-            now= int(time.time())
-            token_payload={
+
+            kid, key_pem = row
+            headers = {"kid": str(kid)}
+            now = int(time.time())
+            token_payload = {
                 "user": "username",
                 "exp": now-3600 if expired else now+3600
             }
-            encoded_jwt = jwt.encode(token_payload, key_pem, algorithm="RS256", headers=headers)
+            encoded_jwt = jwt.encode(token_payload, key_pem,
+                                     algorithm="RS256", headers=headers)
             self.send_response(200)
             self.end_headers()
             self.wfile.write(bytes(encoded_jwt, "utf-8"))
@@ -108,12 +111,12 @@ class MyServer(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            
+
             connection = connect()
-            rows= read_all_valid_keys(connection)
+            rows = read_all_valid_keys(connection)
             connection.close()
             # JWKS response here
-            keys= {"keys": []}
+            keys = {"keys": []}
             for kid, key_pem in rows:
                 public_num = serialization.load_pem_private_key(
                     key_pem, password=None).public_key().public_numbers()
@@ -132,16 +135,20 @@ class MyServer(BaseHTTPRequestHandler):
         self.end_headers()
         return
 
+
 # save private ley to the database
 def save_key(conn, pem_bytes, expitrd_time):
-    conn.execute("INSERT INTO keys (key, exp) VALUES (?, ?)", (pem_bytes, expitrd_time))
+    conn.execute("INSERT INTO keys (key, exp) VALUES (?, ?)",
+                 (pem_bytes, expitrd_time))
     conn.commit()
-    
+
+
 def seed_keys(conn):
     now = int(time.time())
     # find if there're keys
     valid_count, expired_count = conn.execute(
-        "SELECT COALESCE(SUM(exp > ?), 0), COALESCE(SUM(exp <= ?), 0) FROM keys",
+        "SELECT COALESCE(SUM(exp > ?), 0), "
+        "COALESCE(SUM(exp <= ?), 0) FROM keys",
         (now, now)).fetchone()
     # if no valid -> add one valid key
     if valid_count == 0:
@@ -150,36 +157,45 @@ def seed_keys(conn):
     if not expired_count:
         save_key(conn, expired_pem, now - 3600)
 
-# created the back storage file "totally_not_my_privateKeys.db" and connected to schema.sql file
+
+# created the back storage file "totally_not_my_privateKeys.db"
+# connected to schema.sql file
 def connect(db_file="totally_not_my_privateKeys.db"):
     conn = sqlite3.connect(db_file)
     with open(SCHEMA_FILE) as f:
         conn.executescript(f.read())
     return conn
 
+
 # read private key from database
 def read_privatekey(connection, expired):
     now = int(time.time())
     # if the parameter is prsent
     if expired:
-        sql="SELECT kid, key FROM keys WHERE exp <= ? ORDER BY kid DESC LIMIT 1"
+        sql = ("SELECT kid, key FROM keys WHERE exp <= ? "
+               "ORDER BY kid DESC LIMIT 1")
     # if empty parameter
     else:
-        sql="SELECT kid, key FROM keys WHERE exp > ? ORDER BY kid DESC LIMIT 1"
-    # return (kid, pem) or None 
+        sql = ("SELECT kid, key FROM keys WHERE exp > ? "
+               "ORDER BY kid DESC LIMIT 1")
+    # return (kid, pem) or None
     return connection.execute(sql, (now,)).fetchone()
+
 
 # read all of valid keys from database
 def read_all_valid_keys(connection):
-    now= int(time.time())
+    now = int(time.time())
     # return a list of valid(kid, pem) here
-    return connection.execute("SELECT kid, key FROM keys WHERE exp > ? ORDER BY kid", (now,)).fetchall()
+    return connection.execute(
+        "SELECT kid, key FROM keys WHERE exp > ? ORDER BY kid", (now,)
+        ).fetchall()
+
 
 if __name__ == "__main__":
     conn = connect()
     seed_keys(conn)
     conn.close()
-    
+
     webServer = HTTPServer((hostName, serverPort), MyServer)
     try:
         webServer.serve_forever()
