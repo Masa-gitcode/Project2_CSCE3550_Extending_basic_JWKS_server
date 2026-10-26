@@ -108,18 +108,23 @@ class MyServer(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-type", "application/json")
             self.end_headers()
-            keys = {
-                "keys": [
-                    {
-                        "alg": "RS256",
-                        "kty": "RSA",
-                        "use": "sig",
-                        "kid": "goodKID",
-                        "n": int_to_base64(numbers.public_numbers.n),
-                        "e": int_to_base64(numbers.public_numbers.e),
-                    }
-                ]
-            }
+            
+            connection = connect()
+            rows= read_all_valid_keys(connection)
+            connection.close()
+            # JWKS response here
+            keys= {"keys": []}
+            for kid, key_pem in rows:
+                public_num = serialization.load_pem_private_key(
+                    key_pem, password=None).public_key().public_numbers()
+                keys["keys"].append({
+                    "alg": "RS256",
+                    "kty": "RSA",
+                    "use": "sig",
+                    "kid": str(kid),
+                    "n": int_to_base64(public_num.n),
+                    "e": int_to_base64(public_num.e),
+                })
             self.wfile.write(bytes(json.dumps(keys), "utf-8"))
             return
 
@@ -163,6 +168,12 @@ def read_privatekey(connection, expired):
         sql="SELECT kid, key FROM keys WHERE exp > ? ORDER BY kid DESC LIMIT 1"
     # return (kid, pem) or None 
     return connection.execute(sql, (now,)).fetchone()
+
+# read all of valid keys from database
+def read_all_valid_keys(connection):
+    now= int(time.time())
+    # return a list of valid(kid, pem) here
+    return connection.execute("SELECT kid, key FROM keys WHERE exp > ? ORDER BY kid", (now,)).fetchall()
 
 if __name__ == "__main__":
     conn = connect()
